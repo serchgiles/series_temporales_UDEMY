@@ -1,0 +1,204 @@
+--- 
+title: Series de tiempo
+author: Sergio Iván Arroyo Giles
+output: rmdformats::readthedown
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+# install.packages("rmdformats")
+# library(rmdformats)
+library(lubridate)
+```
+
+# El curso _Series Temporales_ de Udemy
+
+Estas notas se basan en el curso titulado _Series Temporales_ que se encuentra disponible en la plataforma educativa [Udemy](https://www.udemy.com/course/series-temporales/) y que imparte [Elisa Cabana](https://aprendeconeli.com/) al lado de [Juan Gabriel Gomila](https://frogames.es/rutas-de-aprendizaje/).
+
+Desde luego que las notas no pretenden ser un sustituto del gran curso diseñado por los antes mencionados, pero si pretende servir como guía de acompañamiento para quienes decidan tomar o el curso, o a manera de guía rápida para quienes solo quieren recordar algunos conceptos básicos.
+
+Estas notas, evidentemente, están escritas en `R Markdown`.
+
+# Introducción
+
+Las series temporales o series de tiempo son una colección de datos numéricos que se encargan de describir el comportamiento de alguna variable cuya dependencia en el tiempo y el orden cronológico del mismo es crucial. Por ejemplo, si pensamos que en los precios de cierto producto, la dependencia del tiempo será de vital importancia para saber si en algún momento del año ese producto se encarece o no; los pronósticos meteorológicos también dependen de la cronología en la que se acumulan los datos pues podremos _predecir_ si el día de mañana es más probable que llueva si sabemos que en los últimos 2 días se han mantenido las lluvias. 
+
+Como en el ejemplo meteorológico, no solo deseamos describir los datos que se presentan en orden cronológico, si no que tambien deseamos predecir, o dicho más apropiadamente, **pronosticar** el compartimiento de los datos en el futuro. Esta tarea esta a cargo de herramietas estadísticas y matemáticas para obtener el mejor de los resultados basado en las tendencias, patrones, estacionalidades y estabilidad de los datos. 
+
+## Notación matemática
+
+Una colección de datos $X$ sobre un periodo de tiempo $T$ será representada como $(x_t)$ donde para cada observación en el tiempo $t$ se tiene el dato $x_t$. Se puede pensar a $T$ como una partición regular de todo el periodo de tiempo como sigue
+$$T = \{t_1<t_2<\cdots<t_n\}.$$
+De tal modo que la diferencia entre cada par consecutivo es constante, es decir $t_2 - t_1 = t_3 -t_2 = \cdots=t_n - t_{n-1}$.
+
+Por supuesto que siempre será posible reemplazar la notación anterior, y a manera de estandarizar las observaciones, reemplazando $t_i = i$, pues solo nos interesa el orden cronóligico y siempre será posible reinterpretar de acuerdo a la necesidad del problema. De este modo $x_4$ representa la observación que se hace en el cuarto periodo de tiempo. 
+
+# Series de tiempo en `R`
+
+## Ejemplo de carga de datos en R
+
+```{r load library, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+Cargamos el siguiente archivo que se encuentra en formato `csv`. Y demos un vistazo a su contenido.
+
+```{r load data}
+datos <- read.csv("Files/Index2018.csv")
+
+str(datos)
+
+summary(datos)
+
+head(datos)
+```
+
+Antes de modificar el problema más evidente (el nombre de la primer columna de `datos`: `r colnames(datos)[1]`), notemos lo siguiente:
+
+- La primer columna columna contiene fechas codificadas como una cadena de caracteres. Sin embargo, esas fechas parecen estar en orden cronológico ascendente (de la fecha más vieja a la más actual).
+- El resto de las columnas contiene datos numéricos.
+- En ninguna observación tenemos registros con `NA` (si los hubiera, la función `summary` lo hubiera contabilizado).
+ 
+Ahora cambiemos solo el nombre de la primer columna de `datos` y codifiquemos las fechas en el formato correcto
+```{r changing first column name, warning=FALSE}
+colnames(datos)[1] <- "dates"
+datos$dates <- as.Date(datos$dates, format = "%d/%m/%Y")
+str(datos)
+```
+
+## Gráficas de las series de tiempo
+
+Grafiquemos la **serie de tiempo** de la variable `spx`.
+
+```{r Plot SPX, fig.width=10}
+plot(datos$dates, datos$spx, type = "l", col = "blue")
+title("S&P500 Prices")
+```
+
+Podemos ver que alrededor del año 2000 tenemos valores que sugieren una pequeña burbuja o alza en los precios seguida de una caída un poco brusca. Lo mismo sucede alrededor del 2007. 
+
+Ahora veamos el gráfico para la variable `ftse` para comparar los patrones.
+
+```{r Plot ftse, fig.width=10, fig.align='center'}
+plot(datos$dates, datos$ftse, type = "l", col = "red")
+title("FTSE500 Prices")
+```
+
+Lo anterior parece indicar que se comparte le mismo patrón de las caídas y bajas en los precios de ambos productos. Por supuesto, lo anterior puede explicarse debido a la similitud entre los mercados bursátiles de EEUU (*S&P 500*) y los británicos (*FTSE 100*).
+
+Pero veamos como se comportan al mismo tiempo en una gráfica.
+
+```{r Plot ftse vs spx, fig.width=10, fig.align='center'}
+min_y <- min(c(datos$spx, datos$ftse))
+max_y <- max(c(datos$spx, datos$ftse))
+plot(datos$dates, datos$spx, type = "l", col = "blue", ylim = c(min_y, max_y))
+lines(datos$dates, datos$ftse, col = "red")
+title("S&P vs FTSE")
+```
+
+
+Podemos notar que la serie de tiempo de **S&P** "parece verse más estable" que la de **FTSE**. Pero esto es engañoso, pues se debe a la magitud en la que cambian cada uno de los precios.
+
+## Intensidad de los datos
+
+Para identificar la probablidad de los datos o cuales son más probables de salir utilizamos la gráfica *Q-Q plot*, también conocida como gráfica cuartil-cuartil.
+
+```{r qqplots, fig.width=5, fig.align='center', fig.asp=1}
+qqnorm(datos$spx)
+qqline(datos$spx)
+```
+
+Aquí podemos observar que los datos no siguen una distribución normal. Esto en realidad es bueno, pues de ser una distribución normal podríamos utilizar otras herramientas provistas dentro de la inferencia estadística para obtener más información de esos datos. 
+
+## Frecuencia de los datos
+
+Veamos las primeras fechas con las que graficamos los datos. 
+
+```{r dated}
+datos$dates[1:20] 
+```
+
+Si somos lo suficientemente cuidadosos, notaremos que cada 5 días tenemos dos días faltantes en las observaciones, por ejemplo, faltan el 8 y 9, 15 y 16, 22 y 23, 29 y 31 de enero de 1994. Y completamente cuestionable que la frecuencia con la que tomamos nuestros datos es irregular pues en unos días es diaria y se salta 2 días. En principio, nuestra partición del tiempo no es regular. Sin embargo, si desempolvamos nuestro calendario de 1994 notaremos que los días faltantes corresponden a los fines de semana.
+
+```{r weekdays, fig.width=8}
+week_days <- wday(datos$dates, label = T, abbr = T)
+plot(week_days)
+title("Días de la semana registrados")
+table(week_days)
+```
+
+La gráfica y tabla anterior nos muestra que todas las observaciones son registradas en los días de lunes a viernes o **business days**. Por lo tanto, si nuestro marco de referencia es solamente a través de los _business days_, entonces la frecuencia de los datos si es regular y podremos seguir con nuestro análisis.
+
+No obstante, si lo que deseamos es tener observaciones de **todos los días** del año, entonces debemos crear esas observaciones. 
+
+```{r complete all days, warning=FALSE}
+# Creamos una secuencia diaria de nuestras oberservaciones
+dates_by_day <- data.frame(days = seq(min(datos$dates), max(datos$dates), by = "day"))
+
+# Juntamos los días con los datos originales y los huecos se llenaran con NA's
+datos_alldays <- dates_by_day %>% 
+  left_join(datos, by = c("days" = "dates"))
+head(datos_alldays)
+```
+
+Ahora tenemos observaciones pero nos enfrentamos a valores vacíos. 
+
+```{r missing values}
+summary(datos_alldays[-c(1)])
+```
+
+## Valores Faltantes (`NA`)
+
+Al modificar la lógica de nuestras observaciones ahora tenemos `NA` para algunos días. Para esto, será útil la librería `zoo`. Para ellos, debemos crear un objeto `ts` solamente con los datos de S&P.
+
+Veamos que efectivamente ahora tenemos huecos en nuestra serie de tiempo (al menos en los primeros 20 días).
+
+```{r zoo librar, warning=FALSE,, message=FALSE}
+library(zoo)
+sp_ts <- ts(datos_alldays$spx)
+plot(sp_ts[1:20], type = "l")
+```
+
+Hay distintas maneras de llenar esos huecos. Los más relevantes son:
+
+- Asignar un valor fijo para todos.
+- **LOCF** (Last Observation Carried Forward): Reemplazar con el dato inmediato anterior distinto de un `NA`. 
+- **NOCB** (Next Observation Carried Backward): Reemplazar con el dato inmediato siguiente distinto de un `NA`.
+- Hacer interpolación para esos datos (mediante rectas o _splines_).
+
+```{r multiple NA filling}
+# Todos los NA's son reemplazados por la media de todas las observaciones
+sp_ts.mean <- na.aggregate(sp_ts)
+# Valor inmediato anterior disinto a ese NA
+sp_ts.locf <- na.locf(sp_ts)
+# Interpolación lineal
+sp_ts.linear <- na.approx(sp_ts)
+# Interpolación de splines cúbicos
+sp_ts.spline <- na.spline(sp_ts)
+par(mfrow=c(2,2))
+plot(sp_ts.mean[1:30], type = "l", ylab= "Valor")
+title("Reemplazo por la media")
+plot(sp_ts.locf[1:30], type = "l", ylab= "Valor")
+title("LOCF")
+plot(sp_ts.linear[1:30], type = "l", ylab= "Valor")
+title("Interpolación lineal")
+plot(sp_ts.spline[1:30], type = "l", ylab= "Valor")
+title("Interpolación por splines")
+```
+
+## Conjunto de Entrenamiento y de Prueba
+
+En cualquier otro método conocido de aprendizaje de máquina se toman observaciones aleatorias para generar los conjuntos de datos de entrenamiento y de prueba. Sin embargo, el orden cronológico en las series de tiempo es crucial y solamente podremos dividir en dos respetando el orden. Es decir, podemos tomar como nuestro conjunto de entrenamiento al 80% de las primeras observaciones y el resto como nuestro conjunto de prueba.
+
+```{r training and test set}
+limite <- floor(length(sp_ts.linear)*0.8)
+train_set <- c(1:limite)
+test_set <- c((limite+1):length(sp_ts.linear))
+
+plot(datos_alldays$days[train_set], sp_ts.linear[train_set], type="l", 
+     col = "blue", xlim = c(min(dates_by_day$days), max(dates_by_day$days)), 
+     ylim = c(min(sp_ts.linear), max(sp_ts.linear)))
+lines(datos_alldays$days[test_set], sp_ts.linear[test_set], col="red")
+```
+
+En este caso, nuestros datos de entrenamiento son los marcados en azul y el conjunto de prueba es el marcado en rojo.
+
