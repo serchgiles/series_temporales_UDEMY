@@ -8,6 +8,9 @@ knitr::opts_chunk$set(cache = TRUE)
 # install.packages("rmdformats")
 # library(rmdformats)
 library(lubridate)
+library(reticulate)
+library(tidyverse)
+knitr::knit_engines$set(python = reticulate::eng_python)
 ```
 
 # El curso _Series Temporales_ de Udemy
@@ -190,10 +193,12 @@ title("Interpolación por splines")
 En cualquier otro método conocido de aprendizaje de máquina se toman observaciones aleatorias para generar los conjuntos de datos de entrenamiento y de prueba. Sin embargo, el orden cronológico en las series de tiempo es crucial y solamente podremos dividir en dos respetando el orden. Es decir, podemos tomar como nuestro conjunto de entrenamiento al 80% de las primeras observaciones y el resto como nuestro conjunto de prueba.
 
 ```{r training and test set}
+datos_alldays$spx_fill <- sp_ts.linear
 limite <- floor(length(sp_ts.linear)*0.8)
 train_set <- c(1:limite)
 test_set <- c((limite+1):length(sp_ts.linear))
 
+par(mfrow=c(1,1))
 plot(datos_alldays$days[train_set], sp_ts.linear[train_set], type="l", 
      col = "blue", xlim = c(min(dates_by_day$days), max(dates_by_day$days)), 
      ylim = c(min(sp_ts.linear), max(sp_ts.linear)))
@@ -202,3 +207,240 @@ lines(datos_alldays$days[test_set], sp_ts.linear[test_set], col="red")
 
 En este caso, nuestros datos de entrenamiento son los marcados en azul y el conjunto de prueba es el marcado en rojo.
 
+# Series de tiempo notables
+
+## Ruido Blanco
+
+Recordemos que la idea analizar series de tiempo es tratar de predecir o hacer pronósticos con base en datos del pasado. Existe la posibilidad de toparnos con una serie de tiempo conocida como **ruido blanco** que nos imposibilita cumplir con la condición de hacer predicciones del futuro. 
+
+Para considerar a una serie como ruido blanco, esta debe satisfacer 3 condiciones:
+
+- Media constante
+- Varianza constante
+- No tener autocorrelaciones
+
+Para medir la autocorrelación debemos calcular la correlación que hay entre un valor al tiempo $t$ y el valor inmediato anterior. Es decir,
+
+$$\rho = \text{corr}(x_t, x_{t+1}).$$
+Entonces, esperamos que la correlación sea una serie de valores que se comporta aleatoriamente.
+
+A manera de comparar una serie de ruido blanco con una serie temporal que puede tener predicciones, mostramos una serie de tiempo (en azul) y una serie de ruido blanco en gris. 
+
+```{r white noise}
+wn <- rnorm(length(datos_alldays$spx_fill), mean = mean(datos_alldays$spx_fill), sd = sd(datos_alldays$spx_fill))
+datos_alldays$wn <- wn
+plot(datos_alldays$days, datos_alldays$wn, type = "l", col = "gray", 
+     ylim = c(min(datos_alldays$spx_fill, datos_alldays$wn),max(datos_alldays$spx_fill, datos_alldays$wn)))
+lines(datos_alldays$days, datos_alldays$spx_fill, col = "blue")
+```
+
+
+## Caminatas Aleatorias
+
+Será cuando los valores tienden a persistir en el tiempo y las diferencias entre ellos solo es ruido blanco. Por ejemplo, el proceso dado por $P_t = P_{t-1} + \varepsilon_t$ donde $\varepsilon \sim \mathcal{N}(\mu,\sigma^2)$ es un ejemplo de caminata aleatoria. Notemos que mientras más resultados queramos predecir será más difícil encontrar valores estables pues se acumulan los errores o el ruido blanco.
+
+```{r random walks}
+rw <- read.csv("Files/RandWalk.csv")
+str(rw)
+rw$date <- as.Date(rw$date,"%d/%m/%Y")
+plot(rw$date, rw$price, type = "l", col = "gray")
+lines(datos_alldays$days,datos_alldays$spx_fill, col = "red")
+rw.ts <- ts(rw$price)
+```
+Podemos notar que las caminatas aleatorias se parecen más a una serie temporal usual.
+
+En finanzas, se conoce como *eficiencia del mercado* al nivel de dificultad para pronosticar valores correctos. En general, si una serie temporal se asemeja a una caminata aleatoria, los precios no pueden predecirse con gran precisión. Por otro lado, si se pueden predecir con precisión habrá oportunidades de arbitraje. Es decri, los inversores pueden vender y comprar productos mientras se ajustan los precios y obtener ganancias de dichas operaciones.
+
+A continuación mostramos como generar caminatas aleatorias:
+
+```{r, eval=F, echo = T}
+RW <- function(N, x0, mu, variance) {
+  z<-cumsum(rnorm(n=N, mean=0, 
+                  sd=sqrt(variance)))
+  t<-1:N
+  x<-x0+t*mu+z
+  return(x)
+  }
+ 
+P1<-RW(100,10,0,0.0004)
+P2<-RW(100,10,0,0.0004)
+plot(P1, main="Random Walk", 
+     xlab="t",ylab="Price", ylim=c(9.7,10.3),
+     typ='l', col="red")
+ 
+par(new=T)  # para hacer ambos dibujos en el mismo plot
+ 
+plot(P2, main="Random Walk", 
+     xlab="t",ylab="Price", ylim=c(9.7,10.3),
+     typ='l', col="blue")
+```
+
+# Descomposiciones y Filtros
+
+Diremos que una serie de tiempo presenta estacionalidad si es estable a lo largo del tiempo, es decir, cuando la **media** y la **varianza** son constantes en el tiempo, y además no presenta tendencia.
+
+Entonces una serie no estacionaria será aquella cuya tendencia cambia en el tiempo. Por lo que no oscila alrededor de la media constante. 
+
+Una forma de verificar estacionalidad veremos que si al tomar dos secuencias de datos consecutivas de la misma longitud, tendrán covarianzas iguales, independientemente del punto inicial. Esta propiedad se conoce como *estacionariedad en forma débil* o *estacionariedad en covarianza*.  La propiedad de de covarianza se escribe como $$\text{cov}(x_n, x_{n+k}) = \text{cov}(x_m, x_{m+k}).$$
+
+Cuando las muestras tienen las mismas distribuciones, entonces llamaremos a las series con *estacionariedad estricta*. Esto se define como, si $(x_t, x_{t+k})\sim\mathcal{F}(\theta)$ entonces $(x_{t+\tau}, x_{t+k+\tau})\sim\mathcal{F}(\theta)$.
+
+## Prueba Dickey-Fuller (D-F)
+
+Se basa en una prueba de hipótesis para determinar si una serie de tiempo presenta estacionariedad. 
+
+$$H_0: \text{La serie no es estacionaria}\\\text{vs}
+\\H_a: \text{La serie es estacionaria}$$
+
+O bien, 
+
+$$H_0: \varphi = 1\qquad\text{vs}
+\qquad H_a: \varphi < 1$$
+
+donde, $\varphi_k = \text{corr}(x_t, x_{t-k})$ donde $k$ es el tiempo o retraso en dos periodos. Entonces, tomamos $\varphi_1 = \varphi$, es decir, el coeficiente de autorrelación de un retraso. Para aplicar la prueba D-F en `R` deberemos cargar la libreria `tseries`
+
+```{r library tseries, message=FALSE, warning=FALSE}
+library(tseries)
+rw.test <- adf.test(rw.ts, alternative = "stationary")
+wn.test <- adf.test(ts(wn), alternative = "stationary")
+spx.test <- adf.test(sp_ts.linear, alternative = "stationary")
+data.frame("timeserie" = c("Random Walk", "White Noise", "SPX"), "p-value" = c(rw.test$p.value, wn.test$p.value, spx.test$p.value))
+```
+
+De aquí obtenemos que solamente el Ruido Blanco presenta evidencia significativa para decir que la serie presenta estacionariedad. pues el valor $p$ es menor que $0.05$. Recordemos que la elección del valor crítico del valor $p$ es un estándar dentro de la inferencia estadísticas, pero este debe fijarse antes de comnezar a realizar los cálculos estad´siticos y no modificarlo una vez que se obtengan los resultados.
+
+## Estacionalidad 
+
+Sugiere que algunas tendencias apareceran de forma cíclica. Tales como el clima o las temperaturas. 
+
+Esto se puede realizar al descomponer a la serie de tiempo en tres partes:
+ 
+- Tendencia: Muestra el patrón consistente de los datos ($\mu_t$)
+- Estacional: Patrones cíclicos ($S_t$)
+- Residual: Mostrará la diferencia entre los valores reales y el modelo que se ajusta ($\varepsilon_t$)
+
+### Descomposición aditiva
+
+Supngamos que para cada observación en el timepo, se puede descomponer como sigue:
+
+$$X_t = \mu_t + S_t + \varepsilon_t$$
+```{r seasonality additive}
+# Since data starts daily in Jan 7th 1994 and ends Jan 28th 2018 then 
+# frequency = 365, start = c(1994,7) and end = c(2018, 29)
+serie_spx <- ts(datos_alldays$spx_fill, frequency = 365, start = c(1994,7), end = c(2018, 29))
+
+s_dec_add <- decompose(serie_spx, type = "add")
+
+autoplot(s_dec_add)
+```
+
+### Descomposición multiplicativa
+
+Supngamos que para cada observación en el timepo, se puede descomponer como sigue:
+
+$$X_t = \mu_t S_t \varepsilon_t$$
+
+```{r seasionality multpl}
+s_dec_prod<- decompose(serie_spx, type = "mult")
+
+autoplot(s_dec_prod)
+```
+
+Se pueden tener tendencia a la alza, a la baja u horizontales. Otro tipo de tendencia se puede encontrar mediante la estacionalidad pues es una tendencia repetitiva, por ejemplo, las búsquedas de la palabra **snowboarding** durante los últimos años. 
+
+## Filtro Hodrick Prescott
+
+Es un método para descomponer una serie de tiempo en un componente tendencial y componente cíclico. De este modo, si $X_t$ es una nuestra serie de tiempo entonces, $$X_t = \tau_t + c_t$$. Luego, para un valor positivo $\lambda$ se calcula el componente tendencial mediante el siguiente problema de optimización
+
+$$\min \sum_{t=1}^T(x_t-\tau_t)^2 + \lambda\sum_{t=2}^{T-1}\left[(\tau_{t+1}-\tau_t)-(\tau_t-\tau_{t-1})\right]^2$$
+```{r macrodata}
+macrodata <- read.csv("Files/macrodata.csv")
+macrodata$X <- as.Date(macrodata$X, "%m/%d/%Y") 
+colnames(macrodata)[1] <- "dates"
+head(macrodata)
+
+plot(macrodata$dates, macrodata$realgdp, type = "l", col = "blue")
+
+gdp.ts <- ts(macrodata$realgdp, frequency = 4, start = c(1959,1))
+
+# Como los datos son trimestrales entonces lambda = 1600
+hp_gdp.ts <- mFilter::hpfilter(gdp.ts, freq = 1600)
+
+plot(hp_gdp.ts)
+# plot(gdp.ts, col = "blue")
+# lines(hp_gdp.ts$trend, col = "red")
+# legend("topleft", legend = c("GDP", "Trend"), 
+#        col = c("blue", "red"), lty = 1)
+```
+
+## Ejemplo: Pasajeros de Avión
+
+A continuación se carga el conjunto de datos que contiene la cantidad de pasajeros que vuela por mes desde Enero 1949 a Diciembre 1960.
+
+```{r airpassengers}
+airline <- read.csv("Files/airline_passengers.csv", col.names = c("month", "passengers"))
+airline$month <- as.Date(airline$month, "%Y-%m")
+passengers.ts <-ts(airline$passengers, frequency = 12, start = c(1949,1))
+plot(passengers.ts, lwd = 2, col = "blue")
+```
+A simple vista podemos observar dos cosas: primero, parece que hay una tendencia exponencial porque es un poco más alta que la lineal; segundo, los datos parecen mostrar estacionalidad. Para ello, descompondremos los datos por estacionalidad aditiva.
+
+```{r airline aditive}
+dec_adit.passengers <- decompose(passengers.ts)
+autoplot(dec_adit.passengers)
+```
+
+Por lo anterior, es claro que muestra estacionalidad anual y que efectivamente hay una tendencia a la alta. Para demostrar que la tendencia es exponencial deberá aislarse y analizarse por separado. Además, vemos que de acuerdo a nuestro modelo aditivo hay mucho ruido al principio y final de los datos que se visualiza en componente residual. 
+
+Ahora veamos la diferencia con la descomposición multiplicativa.
+
+```{r airline multi}
+dec_mult.passengers <- decompose(passengers.ts, type = "multiplicative")
+autoplot(dec_mult.passengers)
+```
+
+La tendencia a la alza es claramente la misma en esta situación. Ahora, comparemos ambas tendencias con el gráfico original.
+
+```{r both trends}
+trend_add <- dec_adit.passengers$trend
+trend_mult <- dec_mult.passengers$trend
+plot(passengers.ts, ylim = c(min(passengers.ts, trend_add, trend_mult, na.rm = T),
+                             max(passengers.ts, trend_add, trend_mult, na.rm = T)))
+lines(trend_add, col = "blue", lwd=5)
+lines(trend_mult, col = "red", lwd=2)
+legend("topleft", legend = c("Passengers", "Trend Additive", "Trend Multiplicative"), 
+        col = c("black", "blue", "red"), lty = 1)
+```
+
+## Autocorrelación
+
+La correlación entre dos series temporales cambian sus valores. Para calcular la autocorrelación tomaremos una secuencia con retraso de $k$ periodos y la actual. Para ello introducimos la **función de autocorrelación**.
+
+```{r autocorrelación}
+library(forecast)
+par(mfrow=c(1,2))
+Acf(serie_spx, lag.max = 40)
+Acf(wn, lag.max = 40)
+```
+
+Vemos que la grpafica de laizquierda gráfica la correlación de los precios SPX y que la derecha muestra la autocorrelación de solamente el ruido blanco. Esto nos da una buena idea para diferenciar una serie de tiempo útil que solamente ruido blanco.
+
+### Autocorrelación Parcial
+
+Si medimos la autocorrelación con $k$ retrasos del periodo actual entonces estaremos midiendo de forma directa los efectos de los periodos $k+1$, $k+2$, etc hasta llegar al actual. Del mismo modo, así como los periodos anteriores afectan al actual los previos a cualquiera de los periodos anteriores se afectan entre sí. Por ejemplo, considere que se calcula el coeficiente de autocorrelación del periodo actual $4$ con $3$ retrasos captura de forma **directa**, es decir los datos del periodo $1,2,3$ contribuyen a ese cálculo. Y, por otro lado, para el periodo $3$ tenemos que los periodos $1,2$ los afectan y para el periodo $2$ lo afecta el $1$, estas contribuciones afectan de forma **inderecta** al periodo $4$.
+
+Entonces, para cada $k$ se define la autocorrelación parcial con $k$ retrasos como
+$$\alpha(1) = \text{corr}(x_{t+1},x_t)\\
+\alpha(k) = \text{corr}(x_{t+k} - P_{t,k}(x_{t+k}), x_{t} - P_{t,k}(x_{t}))$$
+
+donde $P_{t,k}(x_{t})$ es la proyección de $x$ en el espacio abarcado por $x_{t+1}, \ldots, x_{t+k-1}$.
+
+```{r partial autocorr}
+par(mfrow=c(1,2))
+Acf(serie_spx, lag.max = 40, type = "partial")
+Acf(wn, lag.max = 40, type = "partial")
+```
+
+Notemos que para el gráfico de la izquierda ha cambiado significativamente su forma a los de la versión de autocorrelación. Es decir, nos dice que el efecto de los datos son directamente al precio de hoy. Por otro lado, si se encuentran dentro de la banda de confianza podemos deducir que no son significativamente distintos de cero, por lo que no son realmente importantes.
+
+## Ejemplo: Temperaturas
